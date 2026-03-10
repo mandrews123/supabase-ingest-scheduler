@@ -75,7 +75,7 @@ jobs:
 
           echo "Resolved -> SPORTS='$SPORTS' DAYS=$DAYS_VAL"
 
-      - name: Ingest with curl
+      - name: Ingest with curl (DEBUG)
         shell: bash
         env:
           SPORTS: ${{ steps.cfg.outputs.SPORTS }}
@@ -93,8 +93,7 @@ jobs:
             HEADERS+=( -H "Authorization: Bearer ${SUPABASE_JWT}" )
           fi
 
-          # helper to call curl consistently
-          call_curl () {
+          call_curl_debug () {
             local sport="$1"
             local days="$2"
             local url="${base}?only=${sport}"
@@ -102,26 +101,22 @@ jobs:
               url="${url}&days=${days}"
             fi
             echo "::group::POST ${url}"
-            curl -sSf -X POST "$url" "${HEADERS[@]}" -d '{}' || {
-              echo "Request failed for sport=${sport}" >&2
-              exit 1
-            }
-            echo
+            # No -f here, so we can see the error body even on 4xx/5xx
+            curl -sS -D /tmp/headers.txt -o /tmp/body.txt \
+              -w "HTTP_CODE=%{http_code}\n" \
+              -X POST "$url" "${HEADERS[@]}" -d '{}' || true
+            echo "--- Response headers ---"
+            cat /tmp/headers.txt || true
+            echo "--- Response body ---"
+            cat /tmp/body.txt || true
             echo "::endgroup::"
           }
 
-          # Note: NCAA is today-only; days are ignored server-side for NCAA.
           for s in ${SPORTS}; do
             case "$s" in
-              soccer|ufc|boxing|nba|mlb)
-                call_curl "$s" "$DAYS"
-                ;;
-              ncaa)
-                call_curl "$s" 1
-                ;;
-              *)
-                echo "Skipping unknown sport '$s'" >&2
-                ;;
+              soccer|ufc|boxing|nba|mlb) call_curl_debug "$s" "$DAYS" ;;
+              ncaa)                       call_curl_debug "$s" 1      ;; # today-only
+              *) echo "Skipping unknown sport '$s'" >&2 ;;
             esac
           done
 
