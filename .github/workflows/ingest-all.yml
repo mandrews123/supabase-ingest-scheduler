@@ -8,26 +8,20 @@ on:
         required: true
         default: 'all'
         type: choice
-        options:
-          - all
-          - soccer
-          - ufc
-          - ncaa
-          - boxing
-          - nba
-          - mlb
+        options: [all, soccer, ufc, ncaa, boxing, nba, mlb]
       mode:
         description: 'today = only today; future-range = today + next N-1 days'
         required: true
         default: 'future-range'
         type: choice
-        options:
-          - today
-          - future-range
+        options: [today, future-range]
       days:
-        description: 'Number of days when mode=future-range (1-30, includes today)'
+        description: 'Used only when mode=future-range (1-30, includes today)'
         required: true
         default: '7'
+      date:
+        description: 'Optional YYYY-MM-DD (strongly recommended for NCAA evening slates)'
+        required: false
 
 jobs:
   ingest:
@@ -35,6 +29,7 @@ jobs:
     env:
       PROJECT_URL: https://dpdbdiwfanenccdvuyao.supabase.co
       FUNCTION_NAME: hyper-function
+      # If your function is protected, add a repo secret SUPABASE_ANON_JWT; if public, you can omit it.
       SUPABASE_JWT: ${{ secrets.SUPABASE_ANON_JWT }}
     steps:
       - name: Resolve inputs
@@ -42,95 +37,71 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          SPORT_INPUT="${{ github.event.inputs.sport }}"
-          MODE_INPUT="${{ github.event.inputs.mode }}"
-          DAYS_INPUT="${{ github.event.inputs.days }}"
+          SPORT="$(echo "${{ github.event.inputs.sport }}" | tr '[:upper:]' '[:lower:]')"
+          MODE="$(echo "${{ github.event.inputs.mode }}" | tr '[:upper:]' '[:lower:]')"
+          DAYS_IN="${{ github.event.inputs.days }}"
+          DATE_IN="${{ github.event.inputs.date }}"
 
-          # normalize
-          SPORT_INPUT="$(echo "$SPORT_INPUT" | tr '[:upper:]' '[:lower:]')"
-          MODE_INPUT="$(echo "$MODE_INPUT" | tr '[:upper:]' '[:lower:]')"
-
-          # days validation
-          if [[ "$MODE_INPUT" == "future-range" ]]; then
-            if [[ "$DAYS_INPUT" =~ ^[0-9]+$ ]]; then
-              DAYS_VAL="$DAYS_INPUT"
-            else
-              DAYS_VAL=7
-            fi
-            if (( DAYS_VAL < 1 )); then DAYS_VAL=1; fi
-            if (( DAYS_VAL > 30 )); then DAYS_VAL=30; fi
+          # resolve days
+          if [[ "$MODE" == "future-range" ]]; then
+            if [[ "$DAYS_IN" =~ ^[0-9]+$ ]]; then DAYS="$DAYS_IN"; else DAYS=7; fi
+            (( DAYS<1 )) && DAYS=1
+            (( DAYS>30 )) && DAYS=30
           else
-            DAYS_VAL=1
+            DAYS=1
           fi
 
-          # sports list
-          if [[ "$SPORT_INPUT" == "all" ]]; then
+          # expand all → list
+          if [[ "$SPORT" == "all" ]]; then
             SPORTS="soccer ufc ncaa boxing nba mlb"
           else
-            SPORTS="$SPORT_INPUT"
+            SPORTS="$SPORT"
           fi
 
           echo "SPORTS=$SPORTS" >> "$GITHUB_OUTPUT"
-          echo "DAYS=$DAYS_VAL" >> "$GITHUB_OUTPUT"
+          echo "DAYS=$DAYS"     >> "$GITHUB_OUTPUT"
+          echo "DATE=$DATE_IN"  >> "$GITHUB_OUTPUT"
+          echo "Resolved: SPORTS='$SPORTS' DAYS=$DAYS DATE='${DATE_IN:-}'"
 
-          echo "Resolved -> SPORTS='$SPORTS' DAYS=$DAYS_VAL"
-
-      - name: Ingest with curl (DEBUG)
+      - name: Ingest with curl
         shell: bash
         env:
           SPORTS: ${{ steps.cfg.outputs.SPORTS }}
-          DAYS: ${{ steps.cfg.outputs.DAYS }}
+          DAYS:   ${{ steps.cfg.outputs.DAYS }}
+          DATE:   ${{ steps.cfg.outputs.DATE }}
         run: |
           set -euo pipefail
-
           base="${PROJECT_URL}/functions/v1/${FUNCTION_NAME}"
 
-          # headers (always send content-type; add auth if secret exists)
-          declare -a HEADERS
-          HEADERS=( -H "Content-Type: application/json" )
+          # headers
+          declare -a H; H=( -H "Content-Type: application/json" )
           if [[ -n "${SUPABASE_JWT:-}" ]]; then
-            HEADERS+=( -H "apikey: ${SUPABASE_JWT}" )
-            HEADERS+=( -H "Authorization: Bearer ${SUPABASE_JWT}" )
+            H+=( -H "apikey: ${SUPABASE_JWT}" -H "Authorization: Bearer ${SUPABASE_JWT}" )
           fi
 
-          call_curl_debug () {
-            local sport="$1"
-            local days="$2"
-            local url="${base}?only=${sport}"
-            if [[ "$days" != "1" ]]; then
-              url="${url}&days=${days}"
-            fi
+          call () { # sport, days, date
+            local s="$1"; local d="$2"; local dt="$3"
+            local url="${base}?only=${s}"
+            # pass date for NCAA evenings; accepted by all providers (harmless if ignored)
+            if [[ -n "$dt" ]]; then url="${url}&date=${dt}"; fi
+            # NCAA is today-only at source; skip days=N for ncaa
+            if [[ "$d" != "1" && "$s" != "ncaa" ]]; then url="${url}&days=${d}"; fi
             echo "::group::POST ${url}"
-            # No -f here, so we can see the error body even on 4xx/5xx
-            curl -sS -D /tmp/headers.txt -o /tmp/body.txt \
-              -w "HTTP_CODE=%{http_code}\n" \
-              -X POST "$url" "${HEADERS[@]}" -d '{}' || true
-            echo "--- Response headers ---"
-            cat /tmp/headers.txt || true
-            echo "--- Response body ---"
-            cat /tmp/body.txt || true
+            curl -sSf -X POST "$url" "${H[@]}" -d '{}' || { echo "Request failed for sport=${s}" >&2; exit 1; }
             echo "::endgroup::"
           }
 
           for s in ${SPORTS}; do
             case "$s" in
-              soccer|ufc|boxing|nba|mlb) call_curl_debug "$s" "$DAYS" ;;
-              ncaa)                       call_curl_debug "$s" 1      ;; # today-only
+              soccer|ufc|boxing|nba|mlb) call "$s" "$DAYS" "${DATE:-}" ;;
+              ncaa)                      call "$s" "1"     "${DATE:-}" ;; # pass DATE for NCAA; days ignored
               *) echo "Skipping unknown sport '$s'" >&2 ;;
             esac
           done
 
       - name: Where to verify
         run: |
-          echo "✅ Done."
-          echo "Check results in Supabase:"
-          echo " • Edge Functions → ${FUNCTION_NAME} → Invocations (HTTP status & duration)"
+          echo "Check Supabase:"
+          echo " • Edge Functions → ${FUNCTION_NAME} → Invocations (HTTP status/duration)"
           echo " • Edge Functions → ${FUNCTION_NAME} → Logs (look for [ingest] fetched_counts / upserted_total)"
-          echo " • Database → Table Editor → sports.events OR run the SQL below:"
-          cat <<'SQL'
-          select provider, league, sport, event_status,
-                 start_time_utc, home_team, away_team, updated_at
-          from sports.events
-          order by updated_at desc
-          limit 200;
-          SQL
+          echo " • Database → Table Editor → sports.events"
