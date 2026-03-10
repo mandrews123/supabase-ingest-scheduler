@@ -1,17 +1,23 @@
-name: Ingest NCAA (every 10m)
+name: Ingest NCAA (every 10m) — DEBUG
 
 on:
   schedule:
-    - cron: "*/10 * * * *"
-  workflow_dispatch:
+    - cron: "*/10 * * * *"   # every 10 minutes (UTC)
+  workflow_dispatch:          # allow manual trigger
 
 jobs:
   call:
     runs-on: ubuntu-latest
     steps:
-      - name: Call Supabase Edge Function (ncaa)
+      - name: Call Supabase Edge Function (ncaa) — debug
         run: |
-          curl -sSf -X POST \
-            "https://dpdbdiwfanenccdvuyao.supabase.co/functions/v1/hyper-function?only=ncaa" \
+          curl -sS -D /tmp/headers.txt -o /tmp/body.txt \
+            -w "HTTP_CODE=%{http_code}\n" \
+            -X POST "https://dpdbdiwfanenccdvuyao.supabase.co/functions/v1/hyper-function?only=ncaa" \
             -H "Content-Type: application/json" \
             -d '{}'
+          echo "--- Response headers ---"
+          cat /tmp/headers.txt || true
+          echo "--- Response body ---"
+          cat /tmp/body.txt || true
+
