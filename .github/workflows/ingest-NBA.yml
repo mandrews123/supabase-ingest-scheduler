@@ -11,8 +11,6 @@ jobs:
     steps:
       - name: Call Supabase Edge Function (nba)
         run: |
-          curl -sSf -X POST \
-            "https://dpdbdiwfanenccdvuyao.supabase.co/functions/v1/hyper-function?only=nba" \
+          curl -sSf -X POST "https://dpdbdiwfanenccdvuyao.supabase.co/functions/v1/hyper-function?only=nba" \
             -H "Content-Type: application/json" \
             -d '{}'
-``
