@@ -79,29 +79,17 @@ jobs:
             H+=( -H "apikey: ${SUPABASE_JWT}" -H "Authorization: Bearer ${SUPABASE_JWT}" )
           fi
 
-          post_debug () { # sport, days, date
-            local s="$1"; local d="$2"; local dt="$3"
-            local url="${base}?only=${s}"
-            [[ -n "$dt" ]] && url="${url}&date=${dt}"
-            [[ "$d" != "1" && "$s" != "ncaa" ]] && url="${url}&days=${d}"
-            echo "::group::POST ${url}"
-            # No -f here, so we can see error body even on 4xx/5xx
-            curl -sS -D /tmp/headers.txt -o /tmp/body.txt -w "HTTP_CODE=%{http_code}\n" \
-                 -X POST "$url" "${H[@]}" -d '{}' || true
-            echo "--- Response headers ---"; cat /tmp/headers.txt || true
-            echo "--- Response body ---";    cat /tmp/body.txt || true
-            echo "::endgroup::"
-          }
-
-          # You can debug all sports, but since your failure is ncaa, start with just NCAA:
-          post_debug "ncaa" "1" "${DATE:-}"
-
-          # If you also want to debug others in the same run, uncomment the lines below:
-          # post_debug "soccer" "${DAYS}" "${DATE:-}"
-          # post_debug "ufc"    "${DAYS}" "${DATE:-}"
-          # post_debug "boxing" "${DAYS}" "${DATE:-}"
-          # post_debug "nba"    "${DAYS}" "${DATE:-}"
-          # post_debug "mlb"    "${DAYS}" "${DATE:-}"
+          # Debug just the NCAA call first
+          url="${base}?only=ncaa"
+          if [[ -n "${DATE:-}" ]]; then url="${url}&date=${DATE}"; fi
+          echo "::group::POST ${url}"
+          curl -sS -D /tmp/headers.txt -o /tmp/body.txt -w "HTTP_CODE=%{http_code}\n" \
+               -X POST "$url" "${H[@]}" -d '{}' || true
+          echo "--- Response headers ---"
+          cat /tmp/headers.txt || true
+          echo "--- Response body ---"
+          cat /tmp/body.txt || true
+          echo "::endgroup::"
 
       - name: Where to verify
         run: |
