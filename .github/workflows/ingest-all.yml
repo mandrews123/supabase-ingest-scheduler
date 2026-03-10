@@ -1,11 +1,12 @@
-name: Ingest Sports (manual: today or future-range)
+name: 'Ingest Sports (manual: today or future-range)'
 
 on:
   workflow_dispatch:
     inputs:
       sport:
-        description: "Which sport to ingest"
+        description: 'Which sport to ingest'
         required: true
+        default: 'all'
         type: choice
         options:
           - all
@@ -15,51 +16,47 @@ on:
           - boxing
           - nba
           - mlb
-        default: "all"
       mode:
-        description: "today = only today; future-range = today + next N-1 days"
+        description: 'today = only today; future-range = today + next N-1 days'
         required: true
+        default: 'future-range'
         type: choice
         options:
           - today
           - future-range
-        default: "future-range"
       days:
-        description: "Number of days when mode=future-range (1-30, includes today)"
+        description: 'Number of days when mode=future-range (1-30, includes today)'
         required: true
-        default: "7"
+        default: '7'
 
 jobs:
   ingest:
     runs-on: ubuntu-latest
     env:
-      # --- CHANGE THESE ONLY IF YOUR PROJECT/FUNCTION NAME CHANGES ---
       PROJECT_URL: https://dpdbdiwfanenccdvuyao.supabase.co
       FUNCTION_NAME: hyper-function
-
-      # Optional: if your function requires JWT, add this repo secret with your anon (or service) key.
-      # Repo → Settings → Secrets and variables → Actions → New repository secret:
-      #   Name: SUPABASE_ANON_JWT
       SUPABASE_JWT: ${{ secrets.SUPABASE_ANON_JWT }}
     steps:
       - name: Resolve inputs
         id: cfg
         shell: bash
         run: |
+          set -euo pipefail
           SPORT_INPUT="${{ github.event.inputs.sport }}"
-          MODE="${{ github.event.inputs.mode }}"
-          DAYS_RAW="${{ github.event.inputs.days }}"
+          MODE_INPUT="${{ github.event.inputs.mode }}"
+          DAYS_INPUT="${{ github.event.inputs.days }}"
 
-          # Normalize & validate
+          # normalize
           SPORT_INPUT="$(echo "$SPORT_INPUT" | tr '[:upper:]' '[:lower:]')"
-          MODE="$(echo "$MODE" | tr '[:upper:]' '[:lower:]')"
-          if [[ "$MODE" == "future-range" ]]; then
-            if [[ "$DAYS_RAW" =~ ^[0-9]+$ ]]; then
-              DAYS_VAL="$DAYS_RAW"
+          MODE_INPUT="$(echo "$MODE_INPUT" | tr '[:upper:]' '[:lower:]')"
+
+          # days validation
+          if [[ "$MODE_INPUT" == "future-range" ]]; then
+            if [[ "$DAYS_INPUT" =~ ^[0-9]+$ ]]; then
+              DAYS_VAL="$DAYS_INPUT"
             else
               DAYS_VAL=7
             fi
-            # clamp 1..30
             if (( DAYS_VAL < 1 )); then DAYS_VAL=1; fi
             if (( DAYS_VAL > 30 )); then DAYS_VAL=30; fi
           else
@@ -73,57 +70,47 @@ jobs:
             SPORTS="$SPORT_INPUT"
           fi
 
-          echo "SPORTS=$SPORTS" >> $GITHUB_OUTPUT
-          echo "MODE=$MODE" >> $GITHUB_OUTPUT
-          echo "DAYS=$DAYS_VAL" >> $GITHUB_OUTPUT
+          echo "SPORTS=$SPORTS" >> "$GITHUB_OUTPUT"
+          echo "DAYS=$DAYS_VAL" >> "$GITHUB_OUTPUT"
 
-          echo "Resolved -> SPORTS='$SPORTS' MODE='$MODE' DAYS=$DAYS_VAL"
+          echo "Resolved -> SPORTS='$SPORTS' DAYS=$DAYS_VAL"
 
-      - name: Ingest (curl per sport)
+      - name: Ingest with curl
         shell: bash
         env:
           SPORTS: ${{ steps.cfg.outputs.SPORTS }}
           DAYS: ${{ steps.cfg.outputs.DAYS }}
-          MODE: ${{ steps.cfg.outputs.MODE }}
         run: |
           set -euo pipefail
 
           base="${PROJECT_URL}/functions/v1/${FUNCTION_NAME}"
 
-          # Build optional auth headers if a JWT secret is present.
-          H_APK=""
-          H_AUTH=""
+          # headers (always send content-type; add auth if secret exists)
+          declare -a HEADERS
+          HEADERS=( -H "Content-Type: application/json" )
           if [[ -n "${SUPABASE_JWT:-}" ]]; then
-            H_APK="-H \"apikey: ${SUPABASE_JWT}\""
-            H_AUTH="-H \"Authorization: Bearer ${SUPABASE_JWT}\""
+            HEADERS+=( -H "apikey: ${SUPABASE_JWT}" )
+            HEADERS+=( -H "Authorization: Bearer ${SUPABASE_JWT}" )
           fi
 
-          # Helper to call curl with consistent flags.
+          # helper to call curl consistently
           call_curl () {
             local sport="$1"
-            local days="$2"     # number (1..30)
+            local days="$2"
             local url="${base}?only=${sport}"
-            # For providers that support future fixtures, the Edge Function honors ?days=N.
-            # For NCAA the function ignores days (today only).
             if [[ "$days" != "1" ]]; then
               url="${url}&days=${days}"
             fi
             echo "::group::POST ${url}"
-            # shellcheck disable=SC2086
-            eval curl -sSf -X POST \
-              "\"${url}\"" \
-              -H "\"Content-Type: application/json\"" \
-              ${H_APK} ${H_AUTH} \
-              -d "'{}'"
+            curl -sSf -X POST "$url" "${HEADERS[@]}" -d '{}' || {
+              echo "Request failed for sport=${sport}" >&2
+              exit 1
+            }
             echo
             echo "::endgroup::"
           }
 
-          # Note:
-          # - Soccer/UFC/Boxing support future fixtures.
-          # - NBA/MLB support future fixtures only if APISPORTS_KEY is set in Supabase Secrets.
-          # - NCAA is today-only (days ignored by the function).
-
+          # Note: NCAA is today-only; days are ignored server-side for NCAA.
           for s in ${SPORTS}; do
             case "$s" in
               soccer|ufc|boxing|nba|mlb)
@@ -138,14 +125,13 @@ jobs:
             esac
           done
 
-      - name: Hint: where to see results
+      - name: Where to verify
         run: |
-          echo "✅ Done. Verify each request under:"
-          echo "  • Supabase → Edge Functions → ${FUNCTION_NAME} → Invocations (status/duration per request)"
-          echo "  • Supabase → Edge Functions → ${FUNCTION_NAME} → Logs (look for [ingest] fetched_counts / upserted_total)"
-          echo "  • Database → Table Editor → sports.events  (or run a SQL query like below)"
-          echo
-          echo "Sample SQL:"
+          echo "✅ Done."
+          echo "Check results in Supabase:"
+          echo " • Edge Functions → ${FUNCTION_NAME} → Invocations (HTTP status & duration)"
+          echo " • Edge Functions → ${FUNCTION_NAME} → Logs (look for [ingest] fetched_counts / upserted_total)"
+          echo " • Database → Table Editor → sports.events OR run the SQL below:"
           cat <<'SQL'
           select provider, league, sport, event_status,
                  start_time_utc, home_team, away_team, updated_at
