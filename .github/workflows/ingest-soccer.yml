@@ -9,9 +9,14 @@ jobs:
   call:
     runs-on: ubuntu-latest
     steps:
-      - name: Call Supabase Edge Function (soccer)
-        run: |
-          curl -sSf -X POST \
-            "https://dpdbdiwfanenccdvuyao.supabase.co/functions/v1/hyper-function?only=soccer" \
-            -H "Content-Type: application/json" \
-            -d '{}'
+- name: Call Supabase Edge Function (soccer) — debug
+  run: |
+    curl -sS -D /tmp/headers.txt -o /tmp/body.txt \
+      -w "HTTP_CODE=%{http_code}\n" \
+      -X POST "https://dpdbdiwfanenccdvuyao.supabase.co/functions/v1/hyper-function?only=soccer" \
+      -H "Content-Type: application/json" \
+      -d '{}'
+    echo "--- Response headers ---"
+    cat /tmp/headers.txt || true
+    echo "--- Response body ---"
+    cat /tmp/body.txt || true
