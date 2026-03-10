@@ -1,0 +1,17 @@
+name: Ingest Soccer (every 3m)
+
+on:
+  schedule:
+    - cron: "*/3 * * * *"   # runs every 3 minutes (UTC)
+  workflow_dispatch:        # allows manual run from Actions tab
+
+jobs:
+  call:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call Supabase Edge Function (soccer)
+        run: |
+          curl -sSf -X POST \
+            "https://dpdbdiwfanenccdvuyao.supabase.co/functions/v1/hyper-function?only=soccer" \
+            -H "Content-Type: application/json" \
+            -d '{}'
