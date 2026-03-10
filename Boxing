@@ -1,0 +1,17 @@
+name: Ingest Boxing (daily 06:00 UTC)
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  call:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call Supabase Edge Function (boxing)
+        run: |
+          curl -sSf -X POST \
+            "https://dpdbdiwfanenccdvuyao.supabase.co/functions/v1/hyper-function?only=boxing" \
+            -H "Content-Type: application/json" \
+            -d '{}'
